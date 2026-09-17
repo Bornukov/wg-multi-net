@@ -1,0 +1,15 @@
+# Секреты
+config/.env
+*.key
+*.pem
+*.crt
+*.env
+
+# Данные
+*.sqlite3
+*.log
+
+# Системное
+.DS_Store
+*.swp
+*~
