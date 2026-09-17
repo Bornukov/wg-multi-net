@@ -28,3 +28,207 @@
 ```bash
 git clone https://github.com/ВАШ_ЛОГИН/wg-multi-net.git
 cd wg-multi-net
+```
+
+### 2. Настройка `.env`
+
+```bash
+cp config/.env.example config/.env
+nano config/.env
+```
+
+Заполните переменные:
+
+| Переменная | Что указать |
+| :--- | :--- |
+| `WG_ADMIN_PASSWORD` | Пароль администратора для всех `wg-access-server` |
+| `SERVER_IP` | IP вашего VPS |
+| `PORTAL_DOMAIN` | Домен портала, например `vpn1.example.com` |
+| `NET1_DOMAIN` … `NET4_DOMAIN` | Поддомены сетей, например `net1.vpn1.example.com` |
+| `SSL_CERT` | Путь к файлу сертификата (fullchain) |
+| `SSL_KEY` | Путь к файлу приватного ключа |
+| `NETANGELS_API_KEY` | API-ключ NetAngels (если используете автопродление) |
+| `NETANGELS_DOMAIN` | Домен сертификата, например `*.vpn1.example.com` |
+| `NETANGELS_TARGET_DIR` | Куда распаковывать сертификат |
+
+### 3. Настройка сетей (опционально)
+
+`config/networks.conf` — список сетей в формате `имя|CIDR|веб-порт|wg-порт`:
+
+```
+net1|10.197.1.0/24|8443|51820
+net2|10.197.2.0/24|8444|51821
+net3|10.197.3.0/24|8445|51822
+net4|10.197.4.0/24|8446|51823
+```
+
+Если нужно больше сетей — просто добавьте строки.
+
+### 4. Проверка Nginx-конфига
+
+`config/nginx-wg-portal.conf` содержит плейсхолдеры `__PORTAL_DOMAIN__`, `__NET1_DOMAIN__`, `__SSL_CERT__`, `__SSL_KEY__`. `install.sh` заменит их на значения из `.env` автоматически. Менять вручную ничего не нужно, если только вы не хотите изменить структуру блоков.
+
+### 5. Установка
+
+```bash
+sudo ./install.sh
+```
+
+Скрипт:
+
+- Установит Docker, Nginx, Python, Flask, gunicorn, sqlite3, jq, htpasswd, cron
+- Скопирует файлы в `/opt/wg-manager/`, `/opt/wg-portal/`, `/usr/local/bin/`
+- Создаст systemd-сервис `wg-portal-api`
+- Подставит домены и пути сертификата в Nginx-конфиг
+- Запустит контейнеры WireGuard
+- Настроит cron-задачи (генерация портала раз в минуту, обновление сертификата раз в неделю)
+- Сгенерирует страницу портала
+
+### 6. DNS
+
+Создайте A-записи для всех поддоменов, указывающие на IP вашего VPS:
+
+| Имя | Значение |
+| :--- | :--- |
+| `vpn1` | `<SERVER_IP>` |
+| `net1.vpn1` | `<SERVER_IP>` |
+| `net2.vpn1` | `<SERVER_IP>` |
+| `net3.vpn1` | `<SERVER_IP>` |
+| `net4.vpn1` | `<SERVER_IP>` |
+
+Подождите 5–30 минут, пока DNS-записи распространятся. Проверить можно командой:
+
+```bash
+dig @8.8.8.8 vpn1.example.com +short
+```
+
+### 7. SSL-сертификат
+
+Разместите сертификат и ключ по путям, указанным в `.env` (`SSL_CERT`, `SSL_KEY`).
+
+Если используете NetAngels:
+
+1. Выпустите сертификат в панели NetAngels для домена `*.vpn1.example.com` и `vpn1.example.com`.
+2. Укажите в `.env` переменные `NETANGELS_*`.
+3. Первый запуск `update-netangels-cert.sh` выполнится по cron в понедельник в 3:00. Можно запустить вручную:
+
+   ```bash
+   sudo /usr/local/bin/update-netangels-cert.sh
+   sudo systemctl reload nginx
+   ```
+
+### 8. Проверка
+
+- Портал: `https://vpn1.example.com` — страница с кнопками сетей и мониторингом
+- Админки: `https://net1.vpn1.example.com` … `https://net4.vpn1.example.com`
+- Вход в админки: логин `admin`, пароль из `WG_ADMIN_PASSWORD`
+
+## Структура
+
+```
+wg-multi-net/
+├── config/
+│   ├── .env.example              # шаблон переменных
+│   ├── networks.conf             # описание сетей
+│   └── nginx-wg-portal.conf      # шаблон конфига Nginx
+├── opt/
+│   ├── wg-manager/               # скрипты управления контейнерами
+│   │   ├── wg-up.sh
+│   │   ├── wg-down.sh
+│   │   ├── wg-status.sh
+│   │   └── wg-logs.sh
+│   └── wg-portal/                # Flask API для имён сетей
+│       ├── api.py
+│       └── names.json
+├── usr/local/bin/
+│   ├── wg-monitor.sh             # генерация портала с мониторингом
+│   └── update-netangels-cert.sh  # обновление сертификата
+├── systemd/
+│   └── wg-portal-api.service     # сервис для Flask API
+├── install.sh
+└── README.md
+```
+
+## Управление
+
+```bash
+# Запустить все контейнеры
+sudo /opt/wg-manager/wg-up.sh
+
+# Статус
+sudo /opt/wg-manager/wg-status.sh
+
+# Логи конкретной сети
+sudo /opt/wg-manager/wg-logs.sh net1 --follow
+
+# Остановить (тома не удаляются)
+sudo /opt/wg-manager/wg-down.sh
+```
+
+## Подключение клиентов
+
+1. Откройте админку нужной сети: `https://net1.vpn1.example.com`.
+2. Войдите под `admin` и паролем `WG_ADMIN_PASSWORD`.
+3. Нажмите **Add Device**, введите имя устройства, нажмите **ADD**.
+4. Скачайте конфиг (или отсканируйте QR-код) и импортируйте в клиент WireGuard на устройстве.
+
+**Важно:** один конфиг — одно устройство. Не используйте один конфиг на двух устройствах одновременно.
+
+### Правка `AllowedIPs` для администратора
+
+Если вы хотите с одного устройства видеть несколько сетей, откройте скачанный конфиг и замените строку:
+
+```ini
+AllowedIPs = 0.0.0.0/0, ::/0
+```
+
+на список нужных подсетей:
+
+```ini
+AllowedIPs = 10.197.1.0/24, 10.197.2.0/24, 10.197.3.0/24, 10.197.4.0/24
+```
+
+Это позволит вашему устройству маршрутизировать трафик во все четыре сети.
+
+## Добавление новой сети
+
+1. Добавьте строку в `/opt/wg-manager/networks.conf`:
+   ```
+   net5|10.197.5.0/24|8447|51824
+   ```
+2. Запустите `wg-up.sh` — создастся только новая сеть.
+3. В `usr/local/bin/wg-monitor.sh` добавьте `net5` в массив `NETWORKS`.
+4. В `opt/wg-portal/api.py` добавьте `net5` в `DEFAULTS`.
+5. В `config/.env` добавьте `NET5_DOMAIN`.
+6. В `config/nginx-wg-portal.conf` добавьте новый `server`-блок.
+7. Перезапустите API и Nginx:
+   ```bash
+   sudo systemctl restart wg-portal-api
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+
+## Хранение имён сетей
+
+Имена сетей хранятся в `/opt/wg-portal/names.json`. Доступ через REST API:
+
+- `GET /api/names` — получить все имена
+- `POST /api/names` — обновить имя (`{"key": "net1", "name": "Офис"}`)
+- `POST /api/names/reset` — сбросить к дефолтным
+
+API проксируется Nginx по адресу `https://vpn1.example.com/api/names`.
+
+## Обновление сертификата
+
+Если используете NetAngels — cron-задача `update-netangels-cert.sh` запускается раз в неделю (по понедельникам в 3:00) и подтягивает свежий сертификат.
+
+Лог: `/var/log/netangels-cert.log`.
+
+Проверить cron:
+
+```bash
+sudo crontab -l
+```
+
+## Лицензия
+
+MIT
